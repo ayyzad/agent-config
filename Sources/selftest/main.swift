@@ -180,6 +180,14 @@ var refusedDir = false
 do { _ = try SettingsDocument.load(.project(linkedDir)) } catch SettingsError.outsideProject { refusedDir = true }
 check(refusedDir, "refuses a .claude folder that links outside the project")
 
+let dangling = tmp.appending(path: "evil3")
+let outsideNew = tmp.appending(path: "outside/created-by-attack.json")
+try FileManager.default.createDirectory(at: dangling.appending(path: ".claude"), withIntermediateDirectories: true)
+try FileManager.default.createSymbolicLink(at: dangling.appending(path: ".claude/settings.local.json"), withDestinationURL: outsideNew)
+var refusedDangling = false
+do { try SettingsWriter.write("{}\n", to: .local(dangling), expecting: nil) } catch SettingsError.outsideProject { refusedDangling = true }
+check(refusedDangling && !FileManager.default.fileExists(atPath: outsideNew.path), "refuses a dangling link that points outside the project")
+
 let hookRepo = tmp.appending(path: "hook-repo")
 let marker = tmp.appending(path: "fsmonitor-ran")
 try FileManager.default.createDirectory(at: hookRepo, withIntermediateDirectories: true)

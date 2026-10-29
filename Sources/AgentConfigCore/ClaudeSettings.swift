@@ -9,7 +9,8 @@ public enum Paths {
         let fm = FileManager.default
         var existing = url.standardizedFileURL
         var rest: [String] = []
-        while !fm.fileExists(atPath: existing.path), existing.path != "/" {
+        // attributesOfItem doesn't follow links, so a dangling link counts as present.
+        while (try? fm.attributesOfItem(atPath: existing.path)) == nil, existing.path != "/" {
             rest.insert(existing.lastPathComponent, at: 0)
             existing = existing.deletingLastPathComponent()
         }
@@ -76,10 +77,18 @@ public struct SettingsLocation: Hashable, Identifiable, Sendable {
     public var isEditable: Bool { kind != .managed }
 
     /// Project files must really live inside their project. A project could ship
-    /// `.claude/settings.local.json` as a link to some other file; that's refused.
-    /// User-level files may be links (dotfiles repos).
+    /// `.claude` or `.claude/settings.local.json` as a link (even a dangling one)
+    /// to some other file, so any link there is refused. User-level files may be
+    /// links (dotfiles repos).
     public func checkContained() throws {
         guard let root = projectRoot else { return }
+        let fm = FileManager.default
+        for path in [url.deletingLastPathComponent().path, url.path] {
+            if let type = (try? fm.attributesOfItem(atPath: path))?[.type] as? FileAttributeType, type == .typeSymbolicLink {
+                let target = (try? fm.destinationOfSymbolicLink(atPath: path)) ?? "another location"
+                throw SettingsError.outsideProject(target)
+            }
+        }
         let realRoot = Paths.resolved(root).path
         let realFile = Paths.resolved(url).path
         guard realFile.hasPrefix(realRoot + "/") else { throw SettingsError.outsideProject(Paths.tilde(realFile)) }
@@ -152,7 +161,7 @@ public enum SettingsError: Error, LocalizedError {
         case .listNotAnArray(let key): "\"permissions.\(key)\" in this file isn't a list, so it can't be edited safely."
         case .readOnly: "This file is read-only."
         case .changedOnDisk: "The file changed on disk since you opened the preview (Claude Code may have just written to it). It has been reloaded; try again."
-        case .outsideProject(let target): "This project settings file is a link to \(target), which is outside the project. Agent Config won't read or change it, so a project can't redirect edits to another file."
+        case .outsideProject(let target): "This project's settings file (or its .claude folder) is a link to \(target). Agent Config won't read or change linked project settings, so a project can't redirect edits to another file."
         }
     }
 }
@@ -303,6 +312,7 @@ public enum SettingsWriter {
         guard location.isEditable else { throw SettingsError.readOnly }
         try location.checkContained()
         _ = try JSON.parse(newText)
-        return try FileWriter.write(newText, to: location.url, expecting: expectedOldText)
+        // Project files were just checked to be plain files: write to that exact path.
+        return try FileWriter.write(newText, to: location.url, expecting: expectedOldText, followLinks: location.projectRoot == nil)
     }
 }

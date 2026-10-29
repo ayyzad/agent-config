@@ -167,10 +167,12 @@ public enum DotfileIO {
 
 public enum FileWriter {
     /// Writes `newText` only if the file still holds `expectedOldText`. Backs up the
-    /// current contents first, follows symlinks and keeps the file's permissions.
+    /// current contents first and keeps the file's permissions. With `followLinks`
+    /// a symlinked file is written through to its target (dotfiles repos); without
+    /// it the exact path is written, and an atomic rename never follows a link.
     @discardableResult
-    public static func write(_ newText: String, to url: URL, expecting expectedOldText: String?) throws -> URL? {
-        let target = url.resolvingSymlinksInPath()
+    public static func write(_ newText: String, to url: URL, expecting expectedOldText: String?, followLinks: Bool = true) throws -> URL? {
+        let target = followLinks ? url.resolvingSymlinksInPath() : url.standardizedFileURL
         let fm = FileManager.default
         let exists = fm.fileExists(atPath: target.path)
         let current = exists ? try String(contentsOf: target, encoding: .utf8) : nil
