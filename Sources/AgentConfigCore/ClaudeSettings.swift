@@ -3,6 +3,21 @@ import Foundation
 public enum Paths {
     public static var home: URL { FileManager.default.homeDirectoryForCurrentUser }
 
+    /// The real location of `url` with symlinks resolved, even when the file
+    /// itself doesn't exist yet (its nearest existing folder is resolved instead).
+    public static func resolved(_ url: URL) -> URL {
+        let fm = FileManager.default
+        var existing = url.standardizedFileURL
+        var rest: [String] = []
+        while !fm.fileExists(atPath: existing.path), existing.path != "/" {
+            rest.insert(existing.lastPathComponent, at: 0)
+            existing = existing.deletingLastPathComponent()
+        }
+        var result = existing.resolvingSymlinksInPath()
+        for part in rest { result = result.appending(path: part) }
+        return result.standardizedFileURL
+    }
+
     public static func tilde(_ path: String) -> String {
         let h = home.path
         if path == h { return "~" }
@@ -59,6 +74,16 @@ public struct SettingsLocation: Hashable, Identifiable, Sendable {
 
     public var id: String { url.path }
     public var isEditable: Bool { kind != .managed }
+
+    /// Project files must really live inside their project. A project could ship
+    /// `.claude/settings.local.json` as a link to some other file; that's refused.
+    /// User-level files may be links (dotfiles repos).
+    public func checkContained() throws {
+        guard let root = projectRoot else { return }
+        let realRoot = Paths.resolved(root).path
+        let realFile = Paths.resolved(url).path
+        guard realFile.hasPrefix(realRoot + "/") else { throw SettingsError.outsideProject(Paths.tilde(realFile)) }
+    }
     public var displayPath: String { Paths.tilde(url.path) }
 
     public var title: String {
@@ -118,6 +143,7 @@ public enum SettingsError: Error, LocalizedError {
     case listNotAnArray(String)
     case readOnly
     case changedOnDisk
+    case outsideProject(String)
 
     public var errorDescription: String? {
         switch self {
@@ -126,6 +152,7 @@ public enum SettingsError: Error, LocalizedError {
         case .listNotAnArray(let key): "\"permissions.\(key)\" in this file isn't a list, so it can't be edited safely."
         case .readOnly: "This file is read-only."
         case .changedOnDisk: "The file changed on disk since you opened the preview (Claude Code may have just written to it). It has been reloaded; try again."
+        case .outsideProject(let target): "This project settings file is a link to \(target), which is outside the project. Agent Config won't read or change it, so a project can't redirect edits to another file."
         }
     }
 }
@@ -158,6 +185,7 @@ public struct SettingsDocument: Sendable {
     public var exists: Bool { originalText != nil }
 
     public static func load(_ location: SettingsLocation) throws -> SettingsDocument {
+        try location.checkContained()
         let url = location.url.resolvingSymlinksInPath()
         guard FileManager.default.fileExists(atPath: url.path) else {
             return SettingsDocument(location: location, originalText: nil, root: .object([]), trailingNewline: true)
@@ -273,6 +301,7 @@ public enum SettingsWriter {
     @discardableResult
     public static func write(_ newText: String, to location: SettingsLocation, expecting expectedOldText: String?) throws -> URL? {
         guard location.isEditable else { throw SettingsError.readOnly }
+        try location.checkContained()
         _ = try JSON.parse(newText)
         return try FileWriter.write(newText, to: location.url, expecting: expectedOldText)
     }

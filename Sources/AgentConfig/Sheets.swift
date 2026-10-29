@@ -183,6 +183,11 @@ struct ReviewChangeSheet: View {
                         Image(systemName: "doc.text")
                     }
                     .foregroundStyle(.secondary)
+                    if let real = file.realPath {
+                        Label("This is a link. The change is saved to \(real).", systemImage: "link")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
                     DiffView(items: file.diff)
                 }
             }

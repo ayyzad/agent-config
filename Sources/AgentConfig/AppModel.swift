@@ -42,6 +42,8 @@ struct FileChange: Identifiable {
     let newText: String
     let diff: [DiffItem]
     let needsGitignore: Bool
+    /// Set when the file is a link, so the review shows where the save really lands.
+    let realPath: String?
 }
 
 /// One or more file changes reviewed and saved together.
@@ -391,7 +393,8 @@ final class AppModel {
             oldText: oldText,
             newText: newText,
             diff: LineDiff.collapsed(LineDiff.lines(from: oldText ?? "", to: newText)),
-            needsGitignore: needsGitignore
+            needsGitignore: needsGitignore,
+            realPath: Paths.resolved(target.url).path == target.url.standardizedFileURL.path ? nil : Paths.tilde(Paths.resolved(target.url).path)
         )
     }
 

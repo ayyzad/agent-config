@@ -158,6 +158,41 @@ let multi = try SettingsDocument.load(fresh)
 let multiText = try multi.text(applying: [.add("Bash(a *)", .allow), .add("Bash(b *)", .deny), .remove("Read", .allow)])
 check(multiText.contains("Bash(a *)") && multiText.contains("Bash(b *)") && !multiText.contains("\"Read\""), "several edits apply in order")
 
+// 8. Security: a project can't redirect its settings file elsewhere; git can't run project hooks.
+let evilRoot = tmp.appending(path: "evil-project")
+let victim = tmp.appending(path: "victim/settings.json")
+try FileManager.default.createDirectory(at: evilRoot.appending(path: ".claude"), withIntermediateDirectories: true)
+try FileManager.default.createDirectory(at: victim.deletingLastPathComponent(), withIntermediateDirectories: true)
+try Data("{}\n".utf8).write(to: victim)
+try FileManager.default.createSymbolicLink(at: evilRoot.appending(path: ".claude/settings.local.json"), withDestinationURL: victim)
+let evil = SettingsLocation.local(evilRoot)
+var refusedLoad = false
+do { _ = try SettingsDocument.load(evil) } catch SettingsError.outsideProject { refusedLoad = true }
+var refusedWrite = false
+do { try SettingsWriter.write("{\"permissions\": {\"allow\": [\"Bash\"]}}\n", to: evil, expecting: "{}\n") } catch SettingsError.outsideProject { refusedWrite = true }
+let victimText = try String(contentsOf: victim, encoding: .utf8)
+check(refusedLoad && refusedWrite && victimText == "{}\n", "refuses project settings that link outside the project")
+
+let linkedDir = tmp.appending(path: "evil2")
+try FileManager.default.createDirectory(at: linkedDir, withIntermediateDirectories: true)
+try FileManager.default.createSymbolicLink(at: linkedDir.appending(path: ".claude"), withDestinationURL: victim.deletingLastPathComponent())
+var refusedDir = false
+do { _ = try SettingsDocument.load(.project(linkedDir)) } catch SettingsError.outsideProject { refusedDir = true }
+check(refusedDir, "refuses a .claude folder that links outside the project")
+
+let hookRepo = tmp.appending(path: "hook-repo")
+let marker = tmp.appending(path: "fsmonitor-ran")
+try FileManager.default.createDirectory(at: hookRepo, withIntermediateDirectories: true)
+let initGit = Process()
+initGit.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+initGit.arguments = ["-C", hookRepo.path, "init", "-q"]
+try initGit.run(); initGit.waitUntilExit()
+let gitConfig = hookRepo.appending(path: ".git/config")
+let configText = try String(contentsOf: gitConfig, encoding: .utf8) + "[core]\n\tfsmonitor = \"touch \(marker.path); false\"\n"
+try Data(configText.utf8).write(to: gitConfig)
+_ = GitCheck.isIgnored(hookRepo.appending(path: ".claude/settings.local.json"), repoRoot: hookRepo)
+check(!FileManager.default.fileExists(atPath: marker.path), "a project's git config can't run commands")
+
 try? FileManager.default.removeItem(at: tmp)
 print(failures == 0 ? "\nAll checks passed." : "\n\(failures) check(s) failed.")
 exit(failures == 0 ? 0 : 1)

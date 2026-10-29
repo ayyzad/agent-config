@@ -47,7 +47,15 @@ public enum GitCheck {
     public static func isIgnored(_ file: URL, repoRoot: URL) -> Bool? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-        process.arguments = ["-C", repoRoot.path, "check-ignore", "-q", file.path]
+        // The project may be untrusted: stop its git config from running anything
+        // (fsmonitor, hooks) and ignore inherited GIT_* settings.
+        process.arguments = ["-C", repoRoot.path,
+                             "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null",
+                             "check-ignore", "-q", "--no-index", file.path]
+        var env = ProcessInfo.processInfo.environment.filter { !$0.key.hasPrefix("GIT_") }
+        env["GIT_CONFIG_NOSYSTEM"] = "1"
+        env["GIT_TERMINAL_PROMPT"] = "0"
+        process.environment = env
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         do { try process.run() } catch { return nil }
